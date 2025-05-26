@@ -1,0 +1,1 @@
+# MAAS(metal as a service)をインストールするためのAnsibleプレイブック

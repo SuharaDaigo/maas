@@ -1,0 +1,51 @@
+---
+- name: Install MAAS via snap
+  hosts: maas_servers
+  become: yes
+
+  vars:
+    maas_admin_user: "admin"
+    maas_admin_pass: "admin123"
+    maas_admin_email: "admin@example.com"
+    maas_snap_channel: "latest/stable"
+
+  tasks:
+
+    - name: Install snapd
+      apt:
+        name: snapd
+        state: present
+        update_cache: yes
+
+    - name: Ensure snapd is running
+      systemd:
+        name: snapd
+        enabled: yes
+        state: started
+
+    - name: Install MAAS snap
+      snap:
+        name: maas
+        classic: yes
+        channel: "{{ maas_snap_channel }}"
+
+    - name: Wait for MAAS snap services to start
+      wait_for:
+        port: 5240
+        timeout: 120
+
+    - name: Initialize MAAS (region+rack)
+      shell: |
+        maas init region+rack --maas-url "http://localhost:5240/MAAS"
+      args:
+        creates: /var/snap/maas/common/maas/maas.db
+
+    - name: Create MAAS admin user
+      shell: |
+        maas createadmin --username {{ maas_admin_user }} --password {{ maas_admin_pass }} --email {{ maas_admin_email }}
+      args:
+        creates: /var/snap/maas/common/maas/.maas-initialized
+
+    - name: Show MAAS Web URL
+      debug:
+        msg: "Access MAAS Web UI at: http://{{ inventory_hostname }}:5240/MAAS/"
