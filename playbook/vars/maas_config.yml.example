@@ -1,0 +1,15 @@
+---
+# MAAS Administrator Configuration
+maas_admin_user: "your_username"
+maas_admin_pass: "your_secure_password"
+maas_admin_email: "your_email@example.com"
+
+# MAAS Snap Configuration
+maas_snap_channel: "3.6/stable"
+
+# PostgreSQL Configuration for Production
+postgres_version: "16"
+postgres_user: "maas"
+postgres_password: "your_database_password"
+postgres_database: "maasdb"
+postgres_host: "localhost"

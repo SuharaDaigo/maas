@@ -1,0 +1,13 @@
+# Ansible generated files
+*.retry
+
+# Sensitive configuration files (uncomment if needed)
+playbook/vars/maas_config.yml
+
+# Backup files
+*.backup
+*~
+
+# OS generated files
+.DS_Store
+Thumbs.db
