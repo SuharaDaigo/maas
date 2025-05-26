@@ -33,6 +33,25 @@
         timeout: 30
       delegate_to: localhost
 
+    - name: Check MAAS services status
+      shell: |
+        sudo systemctl status snap.maas.supervisor.service || true
+        sudo systemctl status snap.maas.regiond.service || true
+        sudo systemctl status snap.maas.rackd.service || true
+      register: maas_services_status
+      failed_when: false
+      changed_when: false
+
+    - name: Debug MAAS services status
+      debug:
+        msg: "MAAS services status: {{ maas_services_status.stdout }}"
+
+    - name: Wait for MAAS services to start
+      wait_for:
+        port: 5240
+        host: localhost
+        timeout: 120
+
     - name: Ensure PostgreSQL is running
       systemd:
         name: postgresql
@@ -55,11 +74,96 @@
         sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw {{ postgres_database }} || \
         sudo -u postgres createdb -O "{{ postgres_user }}" "{{ postgres_database }}"
 
+    - name: Check if MAAS is already initialized
+      shell: sudo maas status
+      register: maas_status
+      failed_when: false
+      changed_when: false
+
+    - name: Debug MAAS status
+      debug:
+        msg: "MAAS status check result: {{ maas_status }}"
+
+    - name: Check PostgreSQL connection
+      shell: |
+        sudo -u postgres psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ postgres_database }} -c "SELECT version();"
+      environment:
+        PGPASSWORD: "{{ postgres_password }}"
+      register: pg_connection_test
+      failed_when: false
+      when: maas_status.rc != 0
+
+    - name: Debug PostgreSQL connection
+      debug:
+        msg: "PostgreSQL connection test: {{ pg_connection_test }}"
+      when: maas_status.rc != 0
+
+    - name: Check MAAS configuration directory
+      file:
+        path: /var/snap/maas/common
+        state: directory
+        mode: '0755'
+      when: maas_status.rc != 0
+
+    - name: Clear any existing MAAS configuration if needed
+      shell: |
+        if [ -f /var/snap/maas/common/maas/regiond.conf ]; then
+          echo "Existing MAAS configuration found, backing up..."
+          sudo cp /var/snap/maas/common/maas/regiond.conf /var/snap/maas/common/maas/regiond.conf.backup.$(date +%Y%m%d_%H%M%S) || true
+        fi
+      when: maas_status.rc != 0
+      register: config_backup
+      failed_when: false
+
     - name: Initialize MAAS with PostgreSQL
       shell: |
-        sudo maas init region+rack --database-uri "postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}/{{ postgres_database }}"
+        echo "Initializing MAAS with database URI..."
+        echo "Database URI: postgres://{{ postgres_user }}:***@{{ postgres_host }}/{{ postgres_database }}"
+
+        # Check if MAAS is already initialized by looking for configuration
+        if sudo maas status 2>/dev/null | grep -q "running"; then
+          echo "MAAS is already running, skipping initialization"
+          exit 0
+        fi
+
+        # Attempt initialization
+        sudo maas init region+rack \
+          --database-uri "postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}/{{ postgres_database }}" \
+          --maas-url "http://{{ ansible_default_ipv4.address }}:5240/MAAS" \
+          --force 2>&1
+      when: maas_status.rc != 0
+      register: maas_init_result
+      failed_when:
+        - maas_init_result.rc != 0
+        - "'already configured' not in maas_init_result.stdout"
+        - "'already configured' not in maas_init_result.stderr"
+        - "'Database already exists' not in maas_init_result.stderr"
+        - "'already running' not in maas_init_result.stdout"
+
+    - name: Debug MAAS initialization result
+      debug:
+        msg: "MAAS initialization result: {{ maas_init_result }}"
+      when: maas_status.rc != 0
 
     - name: Create MAAS admin user
       shell: |
         sudo maas apikey --username "{{ maas_admin_user }}" > /dev/null 2>&1 || \
         sudo maas createadmin --username "{{ maas_admin_user }}" --password "{{ maas_admin_pass }}" --email "{{ maas_admin_email }}"
+      when: maas_status.rc != 0
+      register: admin_creation_result
+      failed_when:
+        - admin_creation_result.rc != 0
+        - "'already exists' not in admin_creation_result.stderr"
+
+    - name: Display MAAS status
+      shell: sudo maas status
+      register: final_maas_status
+      changed_when: false
+
+    - name: Show MAAS access information
+      debug:
+        msg: |
+          MAAS has been successfully installed and configured.
+          Web UI: http://{{ ansible_default_ipv4.address }}:5240/MAAS/
+          Admin user: {{ maas_admin_user }}
+          Status: {{ final_maas_status.stdout }}
