@@ -1,6 +1,6 @@
 ---
 - name: Install MAAS
-  hosts: localhost
+  hosts: maas_servers
   become: yes
 
   vars_files:
@@ -11,10 +11,9 @@
     - name: Install required packages
       apt:
         name:
-          - snapd
           - postgresql
           - postgresql-contrib
-        state: present
+          - snapd
         update_cache: yes
 
     - name: Ensure snapd is running
@@ -23,17 +22,16 @@
         enabled: yes
         state: started
 
-    - name: Disable conflicting NTP (systemd-timesyncd)
-      systemd:
-        name: systemd-timesyncd
-        enabled: no
-        state: stopped
-
     - name: Install MAAS snap
       snap:
         name: maas
         classic: yes
         channel: "{{ maas_snap_channel }}"
+
+    - name: Wait for MAAS snap to be ready
+      wait_for:
+        timeout: 30
+      delegate_to: localhost
 
     - name: Ensure PostgreSQL is running
       systemd:
@@ -41,80 +39,27 @@
         enabled: yes
         state: started
 
-    - name: Create PostgreSQL user for MAAS
-      become_user: postgres
-      postgresql_user:
-        name: "{{ postgres_user }}"
-        password: "{{ postgres_password }}"
-        encrypted: yes
-        state: present
-
-    - name: Create PostgreSQL database for MAAS
-      become_user: postgres
-      postgresql_db:
-        name: "{{ postgres_database }}"
-        owner: "{{ postgres_user }}"
-        state: present
-
-    - name: Configure PostgreSQL authentication
-      lineinfile:
-        path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
-        line: "host    {{ postgres_database }}    {{ postgres_user }}    0/0     md5"
-        insertbefore: "^# IPv4 local connections:"
-        backup: yes
-      notify: restart postgresql
-
-    - name: Restart PostgreSQL to apply configuration
-      systemd:
-        name: postgresql
-        state: restarted
-
     - name: Wait for PostgreSQL to be ready
       wait_for:
         port: 5432
-        timeout: 30
+        host: localhost
+        timeout: 60
 
-    - name: Initialize MAAS with PostgreSQL (production setup)
+    - name: Create PostgreSQL user for MAAS
       shell: |
-        sudo maas init region+rack --database-uri "postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}/{{ postgres_database }}" --maas-url "http://{{ ansible_default_ipv4.address | default('localhost') }}:5240/MAAS"
-      args:
-        creates: /var/snap/maas/common/maas/regiond.conf
+        sudo -u postgres psql -c "SELECT 1 FROM pg_roles WHERE rolname='{{ postgres_user }}'" | grep -q 1 || \
+        sudo -u postgres psql -c "CREATE USER \"{{ postgres_user }}\" WITH ENCRYPTED PASSWORD '{{ postgres_password }}'"
+
+    - name: Create PostgreSQL database for MAAS
+      shell: |
+        sudo -u postgres psql -lqt | cut -d \| -f 1 | grep -qw {{ postgres_database }} || \
+        sudo -u postgres createdb -O "{{ postgres_user }}" "{{ postgres_database }}"
+
+    - name: Initialize MAAS with PostgreSQL
+      shell: |
+        sudo maas init region+rack --database-uri "postgres://{{ postgres_user }}:{{ postgres_password }}@{{ postgres_host }}/{{ postgres_database }}"
 
     - name: Create MAAS admin user
       shell: |
+        sudo maas apikey --username "{{ maas_admin_user }}" > /dev/null 2>&1 || \
         sudo maas createadmin --username "{{ maas_admin_user }}" --password "{{ maas_admin_pass }}" --email "{{ maas_admin_email }}"
-      args:
-        creates: /var/snap/maas/common/maas/.admin-created
-      register: admin_creation
-
-    - name: Mark admin user as created
-      file:
-        path: /var/snap/maas/common/maas/.admin-created
-        state: touch
-      when: admin_creation.changed
-
-    - name: Wait for MAAS web interface to be available
-      wait_for:
-        port: 5240
-        host: "{{ ansible_default_ipv4.address | default('127.0.0.1') }}"
-        timeout: 120
-
-    - name: Show MAAS Web URL
-      debug:
-        msg:
-          - "MAAS production installation completed successfully!"
-          - "Access MAAS Web UI at: http://{{ ansible_default_ipv4.address | default(inventory_hostname) }}:5240/MAAS/"
-          - "Admin Username: {{ maas_admin_user }}"
-          - "Database: PostgreSQL ({{ postgres_database }})"
-          - ""
-          - "Next steps:"
-          - "1. Configure DNS forwarder (e.g., 8.8.8.8)"
-          - "2. Import Ubuntu LTS images"
-          - "3. Add SSH keys (Launchpad, GitHub, or upload)"
-          - "4. Enable DHCP on subnets"
-
-  handlers:
-    - name: restart postgresql
-      systemd:
-        name: postgresql
-        state: restarted
