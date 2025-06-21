@@ -5,7 +5,7 @@ maas_admin_pass: "your_secure_password"
 maas_admin_email: "your_email@example.com"
 
 # MAAS Snap Configuration
-maas_snap_channel: "3.6/stable"
+maas_snap_channel: "3.5/stable"
 
 # PostgreSQL Configuration for Production
 postgres_version: "16"
