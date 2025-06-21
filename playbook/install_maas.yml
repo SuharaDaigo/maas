@@ -78,14 +78,14 @@
       debug:
         msg: "MAAS status check result: {{ maas_status }}"
 
-    - name: Check PostgreSQL connection
-      shell: |
-        sudo -u postgres psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ postgres_database }} -c "SELECT version();"
-      environment:
-        PGPASSWORD: "{{ postgres_password }}"
-      register: pg_connection_test
-      failed_when: false
-      when: maas_status.rc != 0
+#    - name: Check PostgreSQL connection
+#      shell: |
+#        sudo -u postgres psql -h {{ postgres_host }} -U {{ postgres_user }} -d {{ postgres_database }} -c "SELECT version();"
+#      environment:
+#        PGPASSWORD: "{{ postgres_password }}"
+#      register: pg_connection_test
+#      failed_when: false
+#      when: maas_status.rc != 0
 
     - name: Debug PostgreSQL connection
       debug:
